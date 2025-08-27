@@ -27,7 +27,9 @@ resource "libvirt_domain" "domain" {
   count  = 2
   name   = "ubuntu-cloud-${count.index}"
   memory = "512"
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
 
   # This file is usually present as part of the ovmf firmware package in many
   # Linux distributions.
