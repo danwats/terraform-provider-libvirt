@@ -33,7 +33,9 @@ resource "libvirt_cloudinit_disk" "commoninit" {
 resource "libvirt_domain" "domain-tubleweed" {
   name   = "tubleweed-terraform"
   memory = "512"
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
 
   cloudinit = libvirt_cloudinit_disk.commoninit.id
 

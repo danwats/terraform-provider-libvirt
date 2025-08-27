@@ -51,7 +51,9 @@ resource "libvirt_ignition" "ignition" {
 resource "libvirt_domain" "coreos-machine" {
   count  = var.hosts
   name   = format(var.hostname_format, count.index + 1)
-  vcpu   = "1"
+  vcpu {
+    value = 1
+  }
   memory = "2048"
 
   ## Use qemu-agent in conjunction with the container

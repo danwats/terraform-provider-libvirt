@@ -25,7 +25,9 @@ resource "libvirt_volume" "debian9-qcow2" {
 resource "libvirt_domain" "domain-debian9-qcow2" {
   name   = "debian9"
   memory = "1024"
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
 
   network_interface {
     bridge = "br0"

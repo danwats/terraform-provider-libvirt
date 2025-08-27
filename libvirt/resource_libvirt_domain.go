@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -58,11 +59,39 @@ func resourceLibvirtDomain() *schema.Resource {
 				Optional: true,
 				ForceNew: false,
 			},
-			"vcpu": {
-				Type:     schema.TypeInt,
+			"hotplug_guest_cpu": {
+				Type:     schema.TypeBool,
 				Optional: true,
-				Default:  1,
-				ForceNew: true,
+			},
+			"vcpu": {
+				Type:     schema.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"placement": {
+							Type:     schema.TypeString,
+							Default:  "static",
+							Optional: true,
+							ForceNew: true,
+						},
+						"set": {
+							Type:     schema.TypeString,
+							Optional: true,
+							ForceNew: true,
+						},
+						"value": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  defaultVCPUValue,
+							ForceNew: true,
+						},
+						"current": {
+							Type:     schema.TypeInt,
+							Optional: true,
+						},
+					},
+				},
 			},
 			"memory": {
 				Type:     schema.TypeInt,
@@ -508,9 +537,12 @@ func resourceLibvirtDomainCreate(ctx context.Context, d *schema.ResourceData, me
 		Value: uint(d.Get("memory").(int)),
 		Unit:  "MiB",
 	}
-	domainDef.VCPU = &libvirtxml.DomainVCPU{
-		Value: uint(d.Get("vcpu").(int)),
+
+	if err := setVCPU(d, &domainDef); err != nil {
+		slog.Info("error is here", "err", "oops")
+		return diag.FromErr(err)
 	}
+
 	domainDef.Description = d.Get("description").(string)
 
 	domainDef.OS.Kernel = d.Get("kernel").(string)
@@ -725,6 +757,20 @@ func resourceLibvirtDomainUpdate(ctx context.Context, d *schema.ResourceData, me
 		}
 	}
 
+	if d.HasChange("vcpu") {
+		changed, err := vCPUChange(virConn, domain, d)
+		if err != nil {
+			return diag.Errorf("error in vcpuchange: %s", err)
+		}
+		guestVcpuChange := d.Get("hotplug_guest_cpu").(bool)
+		if changed && guestVcpuChange {
+			err := onlineCPUsInGuest(virConn, domain)
+			if err != nil {
+				return diag.Errorf("error in setting guest command to enable cpus: %s", err)
+			}
+		}
+	}
+
 	netIfacesCount := d.Get("network_interface.#").(int)
 
 	for i := 0; i < netIfacesCount; i++ {
@@ -812,7 +858,30 @@ func resourceLibvirtDomainRead(ctx context.Context, d *schema.ResourceData, meta
 
 	d.Set("name", domainDef.Name)
 	d.Set("description", domainDef.Description)
-	d.Set("vcpu", domainDef.VCPU.Value)
+
+	if domainDef.VCPU != nil {
+		var vcpu []map[string]interface{}
+		vcpuItem := make(map[string]interface{})
+		if len(domainDef.VCPU.CPUSet) > 0 {
+			if domainDef.VCPU.Current == 0 {
+				domainDef.VCPU.Current = domainDef.VCPU.Value
+			}
+			vcpuItem = map[string]interface{}{
+				"value":     uint(domainDef.VCPU.Value),
+				"current":   uint(domainDef.VCPU.Current),
+				"placement": string(domainDef.VCPU.Placement),
+				"set":       string(domainDef.VCPU.CPUSet),
+			}
+		} else {
+			vcpuItem = map[string]interface{}{
+				"value":     uint(domainDef.VCPU.Value),
+				"placement": string(domainDef.VCPU.Placement),
+			}
+		}
+
+		vcpu = append(vcpu, vcpuItem)
+		d.Set("vcpu", vcpu)
+	}
 
 	switch domainDef.Memory.Unit {
 	case "KiB":

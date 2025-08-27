@@ -29,7 +29,9 @@ resource "libvirt_ignition" "ignition" {
 resource "libvirt_domain" "node" {
   count  = var.hosts
   name   = format(var.hostname_format, count.index + 1)
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
   memory = 2048
 
   disk {

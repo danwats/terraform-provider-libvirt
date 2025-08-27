@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultDomainMemoryMiB = 512
+	defaultVCPUValue       = 1
 )
 
 // from existing domain return its  XMLdefintion.
@@ -53,7 +54,7 @@ func newDomainDef() libvirtxml.Domain {
 		},
 		VCPU: &libvirtxml.DomainVCPU{
 			Placement: "static",
-			Value:     1,
+			Value:     defaultVCPUValue,
 		},
 		CPU: &libvirtxml.DomainCPU{},
 		Devices: &libvirtxml.DomainDeviceList{

@@ -35,7 +35,9 @@ resource "libvirt_volume" "remotehost-qcow2" {
 resource "libvirt_domain" "local-domain" {
   name   = "local"
   memory = "2048"
-  vcpu   = 2
+  vcpu {
+    value = 1
+  }
 
   disk {
     volume_id = libvirt_volume.local-qcow2.id

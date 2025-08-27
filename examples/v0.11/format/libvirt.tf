@@ -38,7 +38,9 @@ resource "libvirt_volume" "vol-debian8-qcow2" {
 resource "libvirt_domain" "domain-debian8-raw" {
   name   = "domain-debian8-raw"
   memory = "256"
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
 
   network_interface {
     network_name = "tf"
@@ -59,7 +61,9 @@ resource "libvirt_domain" "domain-debian8-raw" {
 resource "libvirt_domain" "domain-debian8-qcow2" {
   name   = "domain-debian8-qcow2"
   memory = "256"
-  vcpu   = 1
+  vcpu {
+    value = 1
+  }
 
   network_interface {
     network_name = "tf"

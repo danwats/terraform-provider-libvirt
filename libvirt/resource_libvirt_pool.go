@@ -72,7 +72,9 @@ func resourceLibvirtPool() *schema.Resource {
 						"name": {
 							Type:     schema.TypeString,
 							Optional: true,
-							ForceNew: true,
+							Computed: true,
+							// NOTE: not needed right now. ForceNew comes from name
+							//ForceNew: true,
 						},
 						"device": {
 							Type:     schema.TypeList,
