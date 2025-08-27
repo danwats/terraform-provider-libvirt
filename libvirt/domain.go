@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -298,6 +300,187 @@ func setCoreOSIgnition(d *schema.ResourceData, domainDef *libvirtxml.Domain, arc
 			domainDef.Devices.Disks = append(domainDef.Devices.Disks, igndisk)
 		default:
 			return fmt.Errorf("ignition not supported on %q", arch)
+		}
+	}
+
+	return nil
+}
+
+type eSet struct {
+	cpuLow     int
+	cpuHigh    int
+	cpuTotal   int
+	cpuCurrent uint
+}
+
+func extractSet(domainDef *libvirtxml.Domain) (*eSet, error) {
+	// extracting is only done one way e.g. cpuset="0-4"
+	// not cpuset="1-4,^3,6" in libvirt
+	getSet := "^(\\d+)-(\\d+)"
+
+	r, err := regexp.Compile(getSet)
+	if err != nil {
+		return nil, fmt.Errorf("cannot compile VCPU set regex: %w", err)
+	}
+	cpuValues := r.FindStringSubmatch(domainDef.VCPU.CPUSet)
+	if len(cpuValues) != 3 {
+		return nil, fmt.Errorf("use valid VCPU set. You are using: %s", domainDef.VCPU.CPUSet)
+	}
+
+	low, err := strconv.Atoi(cpuValues[1])
+	if err != nil {
+		return nil, fmt.Errorf("cannot convert VCPU low value to int: %w", err)
+	}
+	high, err := strconv.Atoi(cpuValues[2])
+	if err != nil {
+		return nil, fmt.Errorf("cannot convert VCPU high value to int: %w", err)
+	}
+
+	if low > high {
+		return nil, fmt.Errorf("VCPU low number cannot be greater than high number")
+	}
+
+	total := high - low + 1
+
+	current := domainDef.VCPU.Current
+	// if nothing is set as current, then we are using all vcpus
+	if current == 0 {
+		current = uint(total)
+	}
+	if current < uint(low) {
+		return nil, fmt.Errorf("VCPU current (%d) has to be larger than the lower VCPU (%d)", current, uint(low))
+	}
+	if current > uint(total) {
+		return nil, fmt.Errorf("VCPU current (%d) cannot be larger than total number of vcpu (%d)", current, total)
+	}
+	if domainDef.VCPU.Value != uint(total) {
+		return nil, fmt.Errorf("VCPU value (%d) must match the total number of VCPUs: total is (%d)", domainDef.VCPU.Value, total)
+	}
+
+	return &eSet{
+		cpuLow:     low,
+		cpuHigh:    high,
+		cpuTotal:   total,
+		cpuCurrent: current,
+	}, nil
+}
+
+func setVCPUS(domainDef *libvirtxml.Domain) error {
+	eset, err := extractSet(domainDef)
+	if err != nil {
+		return fmt.Errorf("error extracting cpu set: %w", err)
+	}
+
+	var vcpus libvirtxml.DomainVCPUs
+	slog.Info("extracted set", "eset:", eset)
+	for i := range eset.cpuTotal {
+		// set all the vcpus
+		var s libvirtxml.DomainVCPUsVCPU
+		idValue := uint(i)
+		s.Id = &idValue
+		if i == 0 {
+			// set this as hotplug off for first vcpu
+			s.Hotpluggable = "no"
+			s.Enabled = "yes"
+			vcpus.VCPU = append(vcpus.VCPU, s)
+			continue
+		}
+
+		if int(eset.cpuCurrent) >= i+1 {
+			s.Enabled = "yes"
+			s.Hotpluggable = "yes"
+		} else {
+			s.Enabled = "no"
+			s.Hotpluggable = "yes"
+		}
+
+		vcpus.VCPU = append(vcpus.VCPU, s)
+	}
+
+	slog.Info("cpu info", "vcpus", vcpus)
+
+	domainDef.VCPUs = &vcpus
+
+	return nil
+}
+
+func vCPUChange(virConn *libvirt.Libvirt, domain libvirt.Domain, d *schema.ResourceData) (bool, error) {
+	vcpuListOld := d.Get("vcpu.#").(int)
+
+	for i := range vcpuListOld {
+		prefix := fmt.Sprintf("vcpu.%d", i)
+		set := d.Get(prefix + ".set").(string)
+		if len(set) > 0 {
+			if d.HasChange(prefix + ".current") {
+				current := d.Get(prefix + ".current").(int)
+				flags := libvirt.DomainVCPULive | libvirt.DomainVCPUConfig
+				return true, virConn.DomainSetVcpusFlags(domain, uint32(current), uint32(flags))
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func onlineCPUsInGuest(conn *libvirt.Libvirt, domain libvirt.Domain) error {
+	cmd := `{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","for cpu in /sys/devices/system/cpu/cpu*/online; do [ -f \"${cpu}\" ] && [ $(cat \"${cpu}\") -eq 0 ] && echo 1 > \"${cpu}\"; done"],"capture-output":true}}`
+
+	result, err := conn.QEMUDomainAgentCommand(domain, cmd, 30, 0)
+	if err != nil {
+		return fmt.Errorf("guest agent command failed: %v", err)
+	}
+
+	slog.Info("CPU online result", "guestcpu", result)
+	return nil
+}
+
+func setVCPU(d *schema.ResourceData, domainDef *libvirtxml.Domain) error {
+	vcpuItems := d.Get("vcpu.#").(int)
+	if vcpuItems == 0 {
+		return nil
+	}
+
+	var vc libvirtxml.DomainVCPU
+	for i := range vcpuItems {
+		prefix := fmt.Sprintf("vcpu.%d", i)
+		placement := d.Get(prefix + ".placement").(string)
+		cpuSet := d.Get(prefix + ".set").(string)
+		value := d.Get(prefix + ".value").(int)
+		current := d.Get(prefix + ".current").(int)
+
+		if placement == "" {
+			return fmt.Errorf("placement cannot be empty")
+		}
+
+		if value == 0 {
+			return fmt.Errorf("cpu value cannot be empty")
+		}
+
+		// return early, no hotplug. Just basic vcpus
+		if cpuSet == "" {
+			vc.Placement = placement
+			vc.Value = uint(value)
+			domainDef.VCPU = &vc
+			return nil
+		}
+
+		if current == 0 {
+			return fmt.Errorf("cpu current cannot be empty with vcpu set")
+		}
+
+		// set up for hotpluggable vcpus
+		vc.CPUSet = cpuSet
+		vc.Placement = placement
+		if value == current {
+			vc.Value = uint(value)
+		} else {
+			vc.Value = uint(value)
+			vc.Current = uint(current)
+		}
+		domainDef.VCPU = &vc
+		// set all the vcpus.
+		if err := setVCPUS(domainDef); err != nil {
+			return fmt.Errorf("error getting setVCPUS: %w", err)
 		}
 	}
 

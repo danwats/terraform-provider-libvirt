@@ -47,6 +47,7 @@ func TestAccLibvirtDomainConsoles(t *testing.T) {
 	config := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu{}
 		console {
 			type        = "pty"
 			target_port = "0"

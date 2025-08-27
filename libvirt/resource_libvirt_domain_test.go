@@ -31,6 +31,7 @@ func TestAccLibvirtDomain_Basic(t *testing.T) {
 				Config: fmt.Sprintf(`
 				resource "libvirt_domain" "%s" {
 					name = "%s"
+					vcpu {}
 				}`, randomResourceName, randomDomainName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckLibvirtDomainExists("libvirt_domain."+randomResourceName, &domain),
@@ -39,7 +40,7 @@ func TestAccLibvirtDomain_Basic(t *testing.T) {
 					resource.TestCheckResourceAttr(
 						"libvirt_domain."+randomResourceName, "memory", "512"),
 					resource.TestCheckResourceAttr(
-						"libvirt_domain."+randomResourceName, "vcpu", "1"),
+						"libvirt_domain."+randomResourceName, "vcpu.0.value", "1"),
 				),
 			},
 		},
@@ -60,6 +61,7 @@ func TestAccLibvirtDomain_Description(t *testing.T) {
 				resource "libvirt_domain" "%s" {
 					name = "%s"
                     description = "unit test description"
+					vcpu {}
 				}`, randomResourceName, randomDomainName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckLibvirtDomainExists("libvirt_domain."+randomResourceName, &domain),
@@ -67,6 +69,71 @@ func TestAccLibvirtDomain_Description(t *testing.T) {
 						"libvirt_domain."+randomResourceName, "name", randomDomainName),
 					resource.TestCheckResourceAttr(
 						"libvirt_domain."+randomResourceName, "description", "unit test description"),
+				),
+			},
+		},
+	})
+}
+
+func testAccCheckLibvirtDomainVCPU(domain *libvirt.Domain, checkFunc func(libvirtxml.Domain) error) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		virConn := testAccProvider.Meta().(*Client).libvirt
+		domainDef, err := getXMLDomainDefFromLibvirt(virConn, *domain)
+		if err != nil {
+			return fmt.Errorf("Error retrieving libvirt domain XML description from existing domain: %w", err)
+		}
+		return checkFunc(domainDef)
+	}
+}
+
+func TestAccLibvirtDomain_VCPU(t *testing.T) {
+	var domain libvirt.Domain
+	randomResourceName := acctest.RandStringFromCharSet(10, acctest.CharSetAlpha)
+	randomDomainName := acctest.RandStringFromCharSet(10, acctest.CharSetAlpha)
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckLibvirtDomainDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource "libvirt_domain" "%s" {
+					name = "%s"
+					vcpu {
+						current = 2
+						value = 2
+						set = "0-1"
+					}
+				}`, randomResourceName, randomDomainName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckLibvirtDomainExists("libvirt_domain."+randomResourceName, &domain),
+					resource.TestCheckResourceAttr(
+						"libvirt_domain."+randomResourceName, "name", randomDomainName),
+					resource.TestCheckResourceAttr(
+						"libvirt_domain."+randomResourceName, "vcpu.0.value", "2"),
+					resource.TestCheckResourceAttr(
+						"libvirt_domain."+randomResourceName, "vcpu.0.current", "2"),
+					resource.TestCheckResourceAttr(
+						"libvirt_domain."+randomResourceName, "vcpu.0.set", "0-1"),
+					testAccCheckLibvirtDomainVCPU(&domain, func(domainDef libvirtxml.Domain) error {
+						if domainDef.VCPU.Value != 2 {
+							return fmt.Errorf("expect vcpu value to return 2, got %d", domainDef.VCPU.Value)
+						}
+						if domainDef.VCPU.Current != 0 {
+							// returns 0 - _value_ is already at maximum current is therefore 0
+							return fmt.Errorf("expect vcpu current to return 0, got %d", domainDef.VCPU.Current)
+						}
+
+						if domainDef.VCPU.CPUSet != "0-1" {
+							return fmt.Errorf("expect vcpu set to return '0-1', got '%s'", domainDef.VCPU.CPUSet)
+						}
+
+						if domainDef.VCPU.Placement != "static" {
+							return fmt.Errorf("expect vcpu placement to return 'static', got '%s'", domainDef.VCPU.CPUSet)
+						}
+
+						return nil
+					}),
 				),
 			},
 		},
@@ -87,7 +154,9 @@ func TestAccLibvirtDomain_Detailed(t *testing.T) {
 				resource "libvirt_domain" "%s" {
 					name   = "%s"
 					memory = 384
-					vcpu   = 2
+					vcpu {
+						value = 2
+					}
 				}`, randomResourceName, randomDomainName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckLibvirtDomainExists("libvirt_domain."+randomResourceName, &domain),
@@ -96,7 +165,7 @@ func TestAccLibvirtDomain_Detailed(t *testing.T) {
 					resource.TestCheckResourceAttr(
 						"libvirt_domain."+randomResourceName, "memory", "384"),
 					resource.TestCheckResourceAttr(
-						"libvirt_domain."+randomResourceName, "vcpu", "2"),
+						"libvirt_domain."+randomResourceName, "vcpu.0.value", "2"),
 				),
 			},
 		},
@@ -124,6 +193,7 @@ func TestAccLibvirtDomain_Volume(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 		disk {
 			volume_id = "${libvirt_volume.%s.id}"
 		}
@@ -132,6 +202,7 @@ func TestAccLibvirtDomain_Volume(t *testing.T) {
 	configVolDettached := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -187,6 +258,7 @@ func TestAccLibvirtDomain_VolumeTwoDisks(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 		disk {
 			volume_id = "${libvirt_volume.%s.id}"
 		}
@@ -199,6 +271,7 @@ func TestAccLibvirtDomain_VolumeTwoDisks(t *testing.T) {
 	configVolDettached := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -258,6 +331,7 @@ func TestAccLibvirtDomain_VolumeDriver(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 		disk {
 			volume_id = "${libvirt_volume.%s.id}"
 		}
@@ -313,6 +387,7 @@ func TestAccLibvirtDomain_ScsiDisk(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 		disk {
 			volume_id = "${libvirt_volume.%s.id}"
 			scsi      = "true"
@@ -358,6 +433,7 @@ func TestAccLibvirtDomain_BlockDevice(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 
 		disk {
 			block_device = "%s"
@@ -406,6 +482,7 @@ func TestAccLibvirtDomain_URLDisk(t *testing.T) {
 	configURL := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name = "%s"
+		vcpu {}
 		disk {
 			url = "%s"
 		}
@@ -440,6 +517,7 @@ func TestAccLibvirtDomain_MultiISODisks(t *testing.T) {
 
 	configFourDisks := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
+		vcpu {}
 		name = "%s"
 		disk {
 			file = "%s"
@@ -471,6 +549,7 @@ func TestAccLibvirtDomain_MultiISODisks(t *testing.T) {
 	resource "libvirt_domain" "%s" {
 		name = "%s"
 		cloudinit = "${libvirt_cloudinit_disk.%s.id}"
+		vcpu {}
 		disk {
 			file = "%s"
 		}
@@ -536,6 +615,7 @@ func TestAccLibvirtDomain_KernelInitrdCmdline(t *testing.T) {
 
 	resource "libvirt_domain" "%s" {
 		name   = "terraform-test-domain"
+		vcpu {}
 		kernel = "${libvirt_volume.kernel.id}"
 		initrd = "${libvirt_volume.initrd.id}"
 
@@ -603,6 +683,7 @@ func TestAccLibvirtDomain_NetworkInterface(t *testing.T) {
 		disk {
 			file = "%s/testdata/tcl.iso"
 		}
+		vcpu {}
 	}`, randomNetworkName, randomNetworkName, randomDomainName, randomDomainName, randomNetworkName, randomNetworkName, currentDir)
 
 	resource.Test(t, resource.TestCase{
@@ -656,6 +737,7 @@ func TestAccLibvirtDomain_CheckDHCPEntries(t *testing.T) {
                             hostname = "terraform-test"
                             addresses = ["192.0.0.2"]
                     }
+					vcpu {}
             }`, randomNetworkName, randomNetworkName, randomDomainName, randomDomainName, randomDomainName, randomNetworkName)
 
 	configWithoutDomain := fmt.Sprintf(`
@@ -725,6 +807,7 @@ func TestAccLibvirtDomain_Graphics(t *testing.T) {
 			autoport    = "true"
 			listen_type = "none"
 		}
+		vcpu {}
 	}`, randomPoolName, randomPoolName, randomPoolPath, randomVolumeName, randomVolumeName, randomPoolName, randomDomainName, randomDomainName)
 
 	configListenAddress := fmt.Sprintf(`
@@ -747,6 +830,7 @@ func TestAccLibvirtDomain_Graphics(t *testing.T) {
 			listen_type = "address"
 			listen_address = "127.0.1.1"
 		}
+		vcpu {}
 	}`, randomPoolName, randomPoolName, randomPoolPath, randomVolumeName, randomVolumeName, randomPoolName, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -826,6 +910,7 @@ func TestAccLibvirtDomain_IgnitionObject(t *testing.T) {
 	resource "libvirt_domain" "%s" {
 		name            = "terraform-test-domain"
 		coreos_ignition = "${libvirt_ignition.%s.id}"
+		vcpu {}
 	}
 	`, randomPoolName, randomPoolName, randomPoolPath, randomIgnitionName, randomPoolName, randomDomainName, randomIgnitionName)
 
@@ -856,6 +941,7 @@ func TestAccLibvirtDomain_Cpu(t *testing.T) {
 		cpu  {
 			mode = "custom"
 		}
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -885,6 +971,7 @@ func TestAccLibvirtDomain_Video(t *testing.T) {
 		video {
 			type = "vga"
 		}
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -911,12 +998,14 @@ func TestAccLibvirtDomain_Autostart(t *testing.T) {
 	resource "libvirt_domain" "%s" {
 		name      = "%s"
 		autostart = true
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	autostartFalse := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name      = "%s"
 		autostart = false
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -954,6 +1043,7 @@ func TestAccLibvirtDomain_Filesystems(t *testing.T) {
 			target   = "tmp"
 			readonly = false
 		}
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -1232,6 +1322,7 @@ func subtestAccLibvirtDomainFirmwareNoTemplate(t *testing.T, nvramPath string, f
 	config := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name     = "terraform-test-firmware-no-template"
+		vcpu {}
 		firmware = "%s"
 		nvram {
 			file = "%s"
@@ -1265,6 +1356,7 @@ func subtestAccLibvirtDomainFirmwareTemplate(t *testing.T, nvramPath string, fir
 	config := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name     = "terraform-test-firmware-with-template"
+		vcpu {}
 		firmware = "%s"
 		nvram {
 			file     = "%s"
@@ -1304,6 +1396,7 @@ func TestAccLibvirtDomain_MachineType(t *testing.T) {
 	resource "libvirt_domain" "%s" {
 		name    = "%s"
 		machine = "pc"
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
@@ -1329,6 +1422,7 @@ func TestAccLibvirtDomain_ArchType(t *testing.T) {
 	resource "libvirt_domain" "%s" {
 		name  = "%s"
 		arch  = "i686"
+		vcpu {}
 	}`, randomDomainName, randomDomainName)
 
 	resource.Test(t, resource.TestCase{
@@ -1431,12 +1525,16 @@ func TestAccLibvirtDomain_ShutoffMultiDomainsRunning(t *testing.T) {
 				Config: `
    				resource "libvirt_domain" "domainoff" {
 					name = "domainfalse"
-					vcpu = 1
+					vcpu {
+						value = 1
+					}
 					running = false
 				}
 				resource "libvirt_domain" "domainok" {
 					name = "domaintrue"
-					vcpu = 1
+					vcpu {
+						value = 1
+					}
 					running = true
 				}`,
 				Check: resource.ComposeTestCheckFunc(
@@ -1453,6 +1551,7 @@ func TestAccLibvirtDomain_CaseInsensitiveAttrs_MAC(t *testing.T) {
 	config := fmt.Sprintf(`
 	resource "libvirt_domain" "%s" {
 		name      = "%s"
+		vcpu {}
         network_interface {
             mac = "52:54:00:b2:2f:88"
         }
@@ -1526,7 +1625,9 @@ func TestAccLibvirtDomain_Import(t *testing.T) {
 				resource "libvirt_domain" "%s" {
 					name   = "%s"
 					memory = 384
-					vcpu   = 2
+					vcpu {
+						value = 2
+					}
 				}`, randomDomainName, randomDomainName),
 			},
 			{
@@ -1539,7 +1640,7 @@ func TestAccLibvirtDomain_Import(t *testing.T) {
 					resource.TestCheckResourceAttr(
 						"libvirt_domain.%s-2", "memory", "384"),
 					resource.TestCheckResourceAttr(
-						"libvirt_domain.%s-2", "vcpu", "2"),
+						"libvirt_domain.%s-2", "vcpu.0.value", "2"),
 				),
 			},
 		},

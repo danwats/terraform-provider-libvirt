@@ -298,6 +298,8 @@ func TestAccLibvirtPool_LVMExisting(t *testing.T) {
 				resource "libvirt_pool" "%s" {
 					name = "%s"
 					type = "logical"
+					source {}
+					target {}
 				}`, randomPoolResource, randomPoolName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckLibvirtPoolExists("libvirt_pool."+randomPoolResource, &pool),
