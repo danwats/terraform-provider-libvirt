@@ -413,7 +413,7 @@ func vCPUChange(virConn *libvirt.Libvirt, domain libvirt.Domain, d *schema.Resou
 		if len(set) > 0 {
 			if d.HasChange(prefix + ".current") {
 				current := d.Get(prefix + ".current").(int)
-				flags := libvirt.DomainVCPULive | libvirt.DomainVCPUConfig
+				flags := libvirt.DomainVCPULive | libvirt.DomainVCPUConfig | libvirt.DomainVCPUHotpluggable
 				return true, virConn.DomainSetVcpusFlags(domain, uint32(current), uint32(flags))
 			}
 		}
